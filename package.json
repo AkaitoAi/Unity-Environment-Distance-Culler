@@ -1,0 +1,17 @@
+{
+  "name": "com.environmentculler.distanceculling",
+  "version": "1.0.0",
+  "displayName": "Environment Distance Culler",
+  "description": "High-performance, zero-GC spatial-grid distance and frustum culling system for Unity environments.",
+  "unity": "2021.3",
+  "license": "MIT",
+  "keywords": [
+    "unity",
+    "optimization",
+    "culling",
+    "distance-culling",
+    "spatial-grid",
+    "frustum-culling",
+    "mobile"
+  ]
+}

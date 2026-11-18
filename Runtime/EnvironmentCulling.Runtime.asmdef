@@ -1,0 +1,14 @@
+{
+  "name": "EnvironmentCulling.Runtime",
+  "rootNamespace": "EnvironmentCulling",
+  "references": [],
+  "includePlatforms": [],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": true,
+  "defineConstraints": [],
+  "versionDefines": [],
+  "noEngineReferences": false
+}
