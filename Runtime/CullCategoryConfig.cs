@@ -60,6 +60,7 @@ namespace EnvironmentCulling
         public Bounds cachedBounds;
         public bool hasBounds;
         public int categoryIndex;
+        public bool isWithinDistance;
         public bool isCurrentlyActive;
         public CullMode lastAppliedMode;
         public ICullResettable resettable;
@@ -70,6 +71,7 @@ namespace EnvironmentCulling
             transform = go.transform;
             cachedWorldPosition = transform.position;
             categoryIndex = catIdx;
+            isWithinDistance = go.activeSelf;
             isCurrentlyActive = go.activeSelf;
             renderers = go.GetComponentsInChildren<Renderer>(true);
             resettable = go.GetComponent<ICullResettable>() ?? go.GetComponentInParent<ICullResettable>();
@@ -162,16 +164,17 @@ namespace EnvironmentCulling
             return new Bounds(t.position, Vector3.one * 2f);
         }
 
-        public void SetVisible(bool visible, CullMode mode)
+        public void SetVisible(bool visible, CullMode mode, bool allowResetOnCull = true)
         {
-            if (!visible && resettable != null && !(resettable is UnityEngine.Object uo && uo == null) && resettable.IsBroken)
-            {
-                resettable.ResetOnCull();
-            }
-
             // Allow re-application if the cull mode changed (e.g. switching from
             // frustum RendererOnly to distance SetActive while already hidden)
             if (isCurrentlyActive == visible && lastAppliedMode == mode) return;
+
+            if (!visible && allowResetOnCull && resettable != null &&
+                !(resettable is UnityEngine.Object uo && uo == null) && resettable.IsBroken)
+            {
+                resettable.ResetOnCull();
+            }
 
             isCurrentlyActive = visible;
             lastAppliedMode = mode;

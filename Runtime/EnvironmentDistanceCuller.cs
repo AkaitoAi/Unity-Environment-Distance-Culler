@@ -21,12 +21,14 @@ namespace EnvironmentCulling
 
         [Header("Update Performance Settings")]
         [Tooltip("Time interval in seconds between culling distance checks (e.g. 0.15s - 0.25s).")]
+        [Min(0.02f)]
         [SerializeField] private float checkInterval = 0.2f;
 
         [Tooltip("Enable 2D Spatial Grid Chunking for high object counts.")]
         [SerializeField] private bool useSpatialGrid = true;
 
         [Tooltip("Size of spatial grid cells in meters.")]
+        [Min(5f)]
         [SerializeField] private float gridCellSize = 60f;
 
         [Tooltip("When enabled, recurse into pure container GameObjects so each individual child (tree, building, prop) is culled independently.")]
@@ -63,6 +65,8 @@ namespace EnvironmentCulling
         private float indexedCellSize = -1f;
         private bool gridWasUsed;
         private int scannedCategoryCount;
+        private int liveTrackedCount;
+        private string[][] cachedLowerKeywords;
 
         private sealed class SpatialCell
         {
@@ -80,11 +84,11 @@ namespace EnvironmentCulling
         private bool[] cachedAlwaysVis;
         private bool[] cachedCatFrustum;
         private CullMode[] cachedModes;
-        private WaitForSeconds cachedWaitInstruction;
+        private WaitForSecondsRealtime cachedWaitInstruction;
         private float lastCachedCheckInterval = -1f;
 
         // Statistics
-        public int TotalTrackedCount => trackedObjects.Count;
+        public int TotalTrackedCount => liveTrackedCount;
         public int ActiveCount { get; private set; }
         public int CulledCount => TotalTrackedCount - ActiveCount;
         public int LastEvaluatedObjectCount { get; private set; }
@@ -122,6 +126,24 @@ namespace EnvironmentCulling
         private void OnDisable()
         {
             StopCullingLoop();
+            RestoreAllObjects();
+        }
+
+        /// <summary>
+        /// Restores visibility on all tracked objects (e.g., when disabling the culler).
+        /// </summary>
+        public void RestoreAllObjects()
+        {
+            for (int i = 0; i < trackedObjects.Count; i++)
+            {
+                CulledObjectData obj = trackedObjects[i];
+                if (obj.gameObject == null) continue;
+                obj.isWithinDistance = true;
+                obj.SetVisible(true, cachedModes != null && obj.categoryIndex < cachedModes.Length
+                    ? cachedModes[obj.categoryIndex]
+                    : CullMode.GameObjectSetActive, allowResetOnCull: false);
+            }
+            ActiveCount = liveTrackedCount;
         }
 
         private void Start()
@@ -221,9 +243,9 @@ namespace EnvironmentCulling
             categories = new List<CullCategory>
             {
                 new CullCategory("Small Props", 100f, 15f, new Color(1f, 0.4f, 0.4f), "prop", "light", "barrier", "sign", "lamp", "fence", "trash", "bench", "post", "barrel", "box", "debris"),
-                new CullCategory("Trees & Vegetation", 220f, 20f, new Color(0.4f, 1f, 0.4f), "tree", "bush", "foliage", "grass", "plant", "lake", "flower"),
-                new CullCategory("Buildings & Structures", 450f, 30f, new Color(0.4f, 0.7f, 1f), "building", "house", "stunt", "structure", "bridge", "shop", "tower", "hangar", "wall", "ramp"),
-                new CullCategory("Landmarks & Roads (Always Active)", 1000f, 50f, new Color(1f, 1f, 0.4f), "road", "terrain", "ground", "zebra", "base", "env")
+                new CullCategory("Trees & Vegetation", 220f, 20f, new Color(0.4f, 1f, 0.4f), "tree", "bush", "foliage", "grass", "plant", "flower"),
+                new CullCategory("Buildings & Structures", 450f, 30f, new Color(0.4f, 0.7f, 1f), "building", "house", "structure", "bridge", "shop", "tower", "hangar", "wall", "ramp"),
+                new CullCategory("Landmarks & Roads (Always Active)", 1000f, 50f, new Color(1f, 1f, 0.4f), "road", "terrain", "ground", "zebra", "base")
             };
             categories[0].enableFrustumCulling = false;
             categories[3].alwaysVisible = true;
@@ -239,6 +261,7 @@ namespace EnvironmentCulling
             ActiveCount = 0;
 
             EnsureDefaultCategories();
+            CacheLowerKeywords();
             scannedCategoryCount = categories.Count;
 
             int childCount = transform.childCount;
@@ -248,6 +271,7 @@ namespace EnvironmentCulling
                 RegisterObjectRecursive(child.gameObject, -1);
             }
 
+            liveTrackedCount = trackedObjects.Count;
             if (useSpatialGrid) RebuildSpatialGrid();
 
             if (showDebugLogs)
@@ -280,13 +304,34 @@ namespace EnvironmentCulling
             if (data.isCurrentlyActive) ActiveCount++;
         }
 
+        private void CacheLowerKeywords()
+        {
+            cachedLowerKeywords = new string[categories.Count][];
+            for (int i = 0; i < categories.Count; i++)
+            {
+                List<string> kw = categories[i].nameKeywords;
+                if (kw == null || kw.Count == 0)
+                {
+                    cachedLowerKeywords[i] = Array.Empty<string>();
+                    continue;
+                }
+
+                string[] lower = new string[kw.Count];
+                for (int j = 0; j < kw.Count; j++)
+                {
+                    lower[j] = string.IsNullOrEmpty(kw[j]) ? string.Empty : kw[j].ToLowerInvariant();
+                }
+                cachedLowerKeywords[i] = lower;
+            }
+        }
+
         private int CategorizeGameObject(GameObject go, int parentCategoryIndex = -1)
         {
             string nameLower = go.name.ToLowerInvariant();
 
             for (int i = 0; i < categories.Count; i++)
             {
-                if (IsKeywordMatch(nameLower, categories[i].nameKeywords))
+                if (IsKeywordMatch(nameLower, cachedLowerKeywords[i]))
                 {
                     return i;
                 }
@@ -300,12 +345,12 @@ namespace EnvironmentCulling
             return categories.Count > 2 ? 2 : 0;
         }
 
-        private static bool IsKeywordMatch(string text, List<string> keywords)
+        private static bool IsKeywordMatch(string text, string[] keywordsLower)
         {
-            if (keywords == null) return false;
-            for (int i = 0; i < keywords.Count; i++)
+            if (keywordsLower == null) return false;
+            for (int i = 0; i < keywordsLower.Length; i++)
             {
-                if (text.Contains(keywords[i].ToLowerInvariant())) return true;
+                if (keywordsLower[i].Length > 0 && text.Contains(keywordsLower[i])) return true;
             }
             return false;
         }
@@ -355,7 +400,7 @@ namespace EnvironmentCulling
                 if (cachedWaitInstruction == null || !Mathf.Approximately(lastCachedCheckInterval, checkInterval))
                 {
                     lastCachedCheckInterval = checkInterval;
-                    cachedWaitInstruction = new WaitForSeconds(checkInterval);
+                    cachedWaitInstruction = new WaitForSecondsRealtime(checkInterval);
                 }
 
                 PerformCullingCheck();
@@ -426,7 +471,8 @@ namespace EnvironmentCulling
             if (useSpatialGrid)
             {
                 if (indexedCellSize != Mathf.Max(1f, gridCellSize)) RebuildSpatialGrid();
-                bool hasCustomProtection = protectedTransforms.Count > 0 || protectedPredicate != null ||
+                bool hasPredicate = protectedPredicate != null;
+                bool hasCustomProtection = protectedTransforms.Count > 0 || hasPredicate ||
                     (targetTransform != null && targetTransform.IsChildOf(transform));
 
                 foreach (var entry in spatialGrid)
@@ -444,19 +490,25 @@ namespace EnvironmentCulling
                     bool inRange = !cachedAlwaysVis[catIdx] &&
                         dx * dx + dz * dz <= cachedDeactiveSqrDists[catIdx];
 
-                    if (inRange || cell.needsEvaluation || !gridWasUsed)
+                    if (inRange || cell.needsEvaluation || !gridWasUsed || hasPredicate)
                     {
                         cell.activeCount = 0;
-                        for (int i = 0; i < cell.objects.Count; i++)
+                        for (int i = cell.objects.Count - 1; i >= 0; i--)
                         {
                             CulledObjectData obj = cell.objects[i];
-                            if (obj.gameObject == null) continue;
+                            if (obj.gameObject == null)
+                            {
+                                int last = cell.objects.Count - 1;
+                                cell.objects[i] = cell.objects[last];
+                                cell.objects.RemoveAt(last);
+                                if (liveTrackedCount > 0) liveTrackedCount--;
+                                continue;
+                            }
+
                             LastEvaluatedObjectCount++;
-                            bool visible = cachedAlwaysVis[catIdx] ||
-                                (inRange
-                                    ? EvaluateVisibility(obj, targetPos, doFrustum, camForward, camPos)
-                                    : (hasCustomProtection && IsProtected(obj.gameObject.transform)));
-                            obj.SetVisible(visible, cachedModes[catIdx]);
+                            bool visible = ApplyObjectVisibility(
+                                obj, inRange, cachedAlwaysVis[catIdx], hasCustomProtection,
+                                targetPos, doFrustum, camForward, camPos);
                             if (visible) cell.activeCount++;
                         }
                     }
@@ -468,19 +520,78 @@ namespace EnvironmentCulling
             }
             else
             {
-                for (int i = 0; i < trackedObjects.Count; i++)
+                for (int i = trackedObjects.Count - 1; i >= 0; i--)
                 {
                     CulledObjectData obj = trackedObjects[i];
-                    if (obj.gameObject == null) continue;
+                    if (obj.gameObject == null)
+                    {
+                        int last = trackedObjects.Count - 1;
+                        trackedObjects[i] = trackedObjects[last];
+                        trackedObjects.RemoveAt(last);
+                        if (liveTrackedCount > 0) liveTrackedCount--;
+                        continue;
+                    }
+
                     LastEvaluatedObjectCount++;
-                    bool visible = EvaluateVisibility(obj, targetPos, doFrustum, camForward, camPos);
-                    obj.SetVisible(visible, cachedModes[obj.categoryIndex]);
+                    bool visible = ApplyObjectVisibility(
+                        obj, true, cachedAlwaysVis[obj.categoryIndex], true,
+                        targetPos, doFrustum, camForward, camPos);
                     if (visible) activeCounter++;
                 }
             }
 
             gridWasUsed = useSpatialGrid;
             ActiveCount = activeCounter;
+        }
+
+        private bool ApplyObjectVisibility(
+            CulledObjectData obj,
+            bool inRange,
+            bool alwaysVisible,
+            bool checkProtection,
+            Vector3 targetPos,
+            bool doFrustum,
+            Vector3 camForward,
+            Vector3 camPos)
+        {
+            int catIdx = obj.categoryIndex;
+
+            if (alwaysVisible || (checkProtection && IsProtected(obj.gameObject.transform)))
+            {
+                obj.isWithinDistance = true;
+                obj.SetVisible(true, cachedModes[catIdx], allowResetOnCull: false);
+                return true;
+            }
+
+            if (!inRange)
+            {
+                obj.isWithinDistance = false;
+                obj.SetVisible(false, cachedModes[catIdx], allowResetOnCull: true);
+                return false;
+            }
+
+            float sqrDist = (obj.cachedWorldPosition - targetPos).sqrMagnitude;
+            bool withinDistance = obj.isWithinDistance
+                ? sqrDist <= cachedDeactiveSqrDists[catIdx]
+                : sqrDist <= cachedActiveSqrDists[catIdx];
+
+            obj.isWithinDistance = withinDistance;
+
+            if (!withinDistance)
+            {
+                obj.SetVisible(false, cachedModes[catIdx], allowResetOnCull: true);
+                return false;
+            }
+
+            if (doFrustum && cachedCatFrustum[catIdx] && !IsWithinFrustum(obj, camForward, camPos))
+            {
+                // Frustum-only hiding preserves colliders/scripts and does not reset ICullResettable props.
+                obj.SetVisible(false, CullMode.RendererOnly, allowResetOnCull: false);
+                return false;
+            }
+
+            obj.SetVisible(true, cachedModes[catIdx], allowResetOnCull: false);
+            return true;
         }
 
         private bool IsProtected(Transform t)
@@ -493,91 +604,45 @@ namespace EnvironmentCulling
                 return true;
             }
 
-            if (protectedTransforms.Count > 0 && protectedTransforms.Contains(t))
+            if (protectedTransforms.Count > 0)
             {
-                return true;
+                if (protectedTransforms.Contains(t)) return true;
+                foreach (Transform p in protectedTransforms)
+                {
+                    if (p != null && (t.IsChildOf(p) || p.IsChildOf(t))) return true;
+                }
             }
 
             return protectedPredicate != null && protectedPredicate(t);
         }
 
-        private bool EvaluateVisibility(CulledObjectData obj, Vector3 targetPos, bool doFrustum,
-            Vector3 camForward, Vector3 camPos)
+        private bool IsWithinFrustum(CulledObjectData obj, Vector3 camForward, Vector3 camPos)
         {
-            if (obj.gameObject != null && IsProtected(obj.gameObject.transform))
+            if (onlyCullBehindCamera)
             {
-                return true;
+                if (obj.hasBounds)
+                {
+                    Bounds bounds = obj.cachedBounds;
+                    float extentsProj = bounds.extents.x * Mathf.Abs(camForward.x) +
+                                        bounds.extents.y * Mathf.Abs(camForward.y) +
+                                        bounds.extents.z * Mathf.Abs(camForward.z);
+                    float centerProj = Vector3.Dot(camForward, bounds.center - camPos);
+                    return centerProj + extentsProj >= -frustumPadding;
+                }
+
+                Vector3 toObject = obj.cachedWorldPosition - camPos;
+                return Vector3.Dot(camForward, toObject) >= -frustumPadding;
             }
 
-            int catIdx = obj.categoryIndex;
-            if (cachedAlwaysVis[catIdx]) return true;
-
-            float sqrDist = (obj.cachedWorldPosition - targetPos).sqrMagnitude;
-            bool withinDistance = obj.isCurrentlyActive
-                ? sqrDist <= cachedDeactiveSqrDists[catIdx]
-                : sqrDist <= cachedActiveSqrDists[catIdx];
-
-            bool shouldBeActive = withinDistance;
-
-            if (shouldBeActive && doFrustum && cachedCatFrustum[catIdx])
-            {
-                if (onlyCullBehindCamera)
-                {
-                    if (obj.hasBounds)
-                    {
-                        Bounds bounds = obj.cachedBounds;
-                        float extentsProj = bounds.extents.x * Mathf.Abs(camForward.x) +
-                                            bounds.extents.y * Mathf.Abs(camForward.y) +
-                                            bounds.extents.z * Mathf.Abs(camForward.z);
-                        float centerProj = Vector3.Dot(camForward, bounds.center - camPos);
-
-                        if (centerProj + extentsProj < -frustumPadding)
-                        {
-                            shouldBeActive = false;
-                        }
-                    }
-                    else
-                    {
-                        Vector3 toObject = obj.cachedWorldPosition - camPos;
-                        if (Vector3.Dot(camForward, toObject) < -frustumPadding)
-                        {
-                            shouldBeActive = false;
-                        }
-                    }
-                }
-                else
-                {
-                    Bounds testBounds = obj.cachedBounds;
-                    if (frustumPadding > 0f) testBounds.Expand(frustumPadding * 2f);
-                    if (!GeometryUtility.TestPlanesAABB(frustumPlanes, testBounds))
-                    {
-                        shouldBeActive = false;
-                    }
-                }
-            }
-
-            return shouldBeActive;
+            Bounds testBounds = obj.cachedBounds;
+            if (frustumPadding > 0f) testBounds.Expand(frustumPadding * 2f);
+            return GeometryUtility.TestPlanesAABB(frustumPlanes, testBounds);
         }
 
         private Camera FindFrustumCamera()
         {
             if (frustumCamera != null) return frustumCamera;
             return Camera.main;
-        }
-
-        private void OnDrawGizmosSelected()
-        {
-            if (!drawGizmosInScene || categories == null) return;
-
-            Vector3 center = targetTransform != null ? targetTransform.position : transform.position;
-            for (int i = 0; i < categories.Count; i++)
-            {
-                CullCategory cat = categories[i];
-                if (cat.alwaysVisible) continue;
-
-                Gizmos.color = cat.gizmoColor;
-                Gizmos.DrawWireSphere(center, cat.maxDistance);
-            }
         }
     }
 }

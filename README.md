@@ -63,11 +63,14 @@ In open-world, racing, survival, or city-builder games, keeping thousands of dis
 | Category | Max Distance | Hysteresis | Frustum Culling | Keywords |
 | :--- | :---: | :---: | :---: | :--- |
 | **Small Props** | 100 m | 15 m | Off | `prop`, `light`, `barrier`, `sign`, `lamp`, `fence`, `trash`, `bench`, `post`, `barrel`, `box`, `debris` |
-| **Trees & Vegetation** | 220 m | 20 m | On | `tree`, `bush`, `foliage`, `grass`, `plant`, `lake`, `flower` |
-| **Buildings & Structures** | 450 m | 30 m | On | `building`, `house`, `stunt`, `structure`, `bridge`, `shop`, `tower`, `hangar`, `wall`, `ramp` |
-| **Landmarks & Roads** | 1000 m | 50 m | On (`alwaysVisible`) | `road`, `terrain`, `ground`, `zebra`, `base`, `env` |
+| **Trees & Vegetation** | 220 m | 20 m | On | `tree`, `bush`, `foliage`, `grass`, `plant`, `flower` |
+| **Buildings & Structures** | 450 m | 30 m | On | `building`, `house`, `structure`, `bridge`, `shop`, `tower`, `hangar`, `wall`, `ramp` |
+| **Landmarks & Roads** | 1000 m | 50 m | Always Visible | `road`, `terrain`, `ground`, `zebra`, `base` |
 
-> **Tip:** Pure container `GameObject`s (with children and no `Renderer` of their own) are recursively traversed when `Cull Children Independently` is enabled, and unclassified children inherit their parent container's category.
+> **Notes:**
+> - **Static Position Caching:** `ScanAndInitialize()` caches world positions and bounds once at startup/scan for zero-interop performance. If you move environment objects at runtime, call `ScanAndInitialize()` again.
+> - **Frustum Culling Safety:** Frustum-only hides automatically use `RendererOnly` (keeping colliders/scripts active) and do not trigger `ICullResettable.ResetOnCull()` or corrupt distance hysteresis.
+> - Pure container `GameObject`s (with children and no `Renderer` of their own) are recursively traversed when `Cull Children Independently` is enabled, and unclassified children inherit their parent container's category (or fall back to category index `2` if available, else `0`).
 
 ---
 
@@ -134,14 +137,14 @@ public class DestructibleProp : MonoBehaviour, ICullResettable
    Runs 5× per second instead of every frame (`Update()`), reducing per-frame CPU overhead by ~90%+ while remaining imperceptible with hysteresis.
 
 ### Measured Offline Benchmark Results
-Measured using the included Roslyn offline benchmark harness (`Tests/Offline/run-tests.ps1`) in a `2000 m × 2000 m` simulated world with 4 default categories and `60 m` spatial cell size (100 iterations per configuration):
+Measured using the included Roslyn offline benchmark harness (`Tests/Offline/run-tests.ps1`) in a `2000 m × 2000 m` simulated world with 4 default categories and `60 m` spatial cell size (averaged across 100 iterations per configuration):
 
-| Object Count | Active Objects (% Culled) | Linear Evals / Check | Spatial Grid Evals / Check | Linear Time (C# Double) | Spatial Grid Time (C# Double) | Speedup | Amortized @ 60 FPS (5 Hz) |
+| Object Count | Active Objects (% Culled) | Linear Evals / Check | Spatial Grid Avg Evals / Check | Linear Time (C# Double) | Spatial Grid Time (C# Double) | Speedup | Amortized @ 60 FPS (5 Hz) |
 | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **1,000** | 306 (**69.4% culled**) | 1,000 | **75** (-92.5%) | 0.0189 ms | 0.0224 ms | 0.85× | ~0.0019 ms/frame |
-| **5,000** | 1,509 (**69.8% culled**) | 5,000 | **368** (-92.6%) | 0.0982 ms | 0.0965 ms | 1.02× | ~0.0080 ms/frame |
-| **10,000** | 3,024 (**69.8% culled**) | 10,000 | **719** (-92.8%) | 0.2741 ms | 0.1542 ms | **1.78×** | ~0.0129 ms/frame |
-| **25,000** | 7,578 (**69.7% culled**) | 25,000 | **1,832** (-92.7%) | 1.0905 ms | **0.2230 ms** | **4.89×** | **~0.0186 ms/frame** |
+| **1,000** | 306 (**69.4% culled**) | 1,000 | **74** (-92.6%) | 0.0184 ms | 0.0233 ms | 0.79× | ~0.0019 ms/frame |
+| **5,000** | 1,509 (**69.8% culled**) | 5,000 | **361** (-92.8%) | 0.0901 ms | 0.1266 ms | 0.71× | ~0.0106 ms/frame |
+| **10,000** | 3,024 (**69.8% culled**) | 10,000 | **724** (-92.8%) | 0.1605 ms | 0.1452 ms | **1.10×** | ~0.0121 ms/frame |
+| **25,000** | 7,578 (**69.7% culled**) | 25,000 | **1,840** (-92.6%) | 0.4023 ms | **0.1941 ms** | **2.07×** | **~0.0162 ms/frame** |
 
 > **Why real Unity Editor / Device gains are even larger:**
 > - **~70% of scene objects are disabled** in a typical 2 km × 2 km world, directly cutting active `Renderer`s, shadow-caster submissions, and `Collider`s.

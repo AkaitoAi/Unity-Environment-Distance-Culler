@@ -10,9 +10,11 @@ namespace UnityEngine
     public class HeaderAttribute : Attribute { public HeaderAttribute(string s) { } }
     public class TooltipAttribute : Attribute { public TooltipAttribute(string s) { } }
     public class RangeAttribute : Attribute { public RangeAttribute(float a, float b) { } }
+    public class MinAttribute : Attribute { public MinAttribute(float a) { } }
     public class ContextMenu : Attribute { public ContextMenu(string s) { } }
     public class Coroutine { }
     public class WaitForSeconds { public WaitForSeconds(float s) { } }
+    public class WaitForSecondsRealtime { public WaitForSecondsRealtime(float s) { } }
 
     public class Object
     {
@@ -322,7 +324,73 @@ public static class CullingTestAndBenchmarkRunner
         culler.PerformCullingCheck();
         Assert(culler.ActiveCount == linearActive, "Spatial grid and linear scan must yield identical ActiveCount.");
 
-        Console.WriteLine("[PASS] All regression tests passed (6/6 assertions groups).");
+        // Hierarchy protection test: protecting a container protects its tracked children
+        var container = new UnityEngine.GameObject("Container");
+        container.transform.parent = rootGo.transform;
+        rootGo.transform.children.Add(container.transform);
+        var childOfProtected = CreateProp(container.transform, "prop_inside_container", 900f, 0f, 0f);
+        culler.RegisterProtectedTransform(container.transform);
+        culler.ScanAndInitialize();
+        culler.PerformCullingCheck();
+        Assert(childOfProtected.activeSelf, "RegisterProtectedTransform must protect child objects under a protected container.");
+
+        // Dynamic SetProtectedPredicate on far cell
+        var farPredicateProp = CreateProp(rootGo.transform, "prop_mission_target", 950f, 0f, 0f);
+        bool missionActive = false;
+        culler.SetProtectedPredicate(t => missionActive && t == farPredicateProp.transform);
+        culler.ScanAndInitialize();
+        culler.PerformCullingCheck();
+        Assert(!farPredicateProp.activeSelf, "Far prop should be culled when predicate is false.");
+        missionActive = true;
+        culler.PerformCullingCheck();
+        Assert(farPredicateProp.activeSelf, "Far prop should reactivate when dynamic predicate flips to true.");
+
+        // RestoreAllObjects test (simulates OnDisable cleanup)
+        culler.RestoreAllObjects();
+        Assert(farPredicateProp.activeSelf, "RestoreAllObjects must restore all culled objects.");
+
+        // Frustum culling in hysteresis band must NOT corrupt distance hysteresis or trigger ResetOnCull
+        var frustumRoot = new UnityEngine.GameObject("EnvFrustum");
+        var frustumCuller = new EnvironmentDistanceCuller();
+        frustumCuller.gameObject = frustumRoot;
+        frustumCuller.transform = frustumRoot.transform;
+        var camGo = new UnityEngine.GameObject("MainCam");
+        camGo.transform.position = UnityEngine.Vector3.zero;
+        camGo.transform.forward = new UnityEngine.Vector3(0f, 0f, 1f);
+        var cam = new UnityEngine.Camera();
+        camGo.AddComponentInstance(cam);
+        frustumCuller.SetTarget(cam.transform);
+        frustumCuller.SetCamera(cam);
+        var enableFrustumField = typeof(EnvironmentDistanceCuller).GetField("enableFrustumCulling", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        enableFrustumField.SetValue(frustumCuller, true);
+
+        // Tree category: maxDistance 220m, hysteresis 20m, enableFrustumCulling = true
+        var treeBehind = CreateProp(frustumRoot.transform, "tree_hyst", 0f, 0f, -230f);
+        var treeResettable = new MockResettable { IsBroken = true };
+        treeBehind.AddComponentInstance(treeResettable);
+        var treeRenderer = treeBehind.GetComponent<UnityEngine.MeshRenderer>();
+
+        frustumCuller.ScanAndInitialize();
+        // Step 1: Start within 220m looking at it
+        cam.transform.position = new UnityEngine.Vector3(0f, 0f, -20f);
+        cam.transform.forward = new UnityEngine.Vector3(0f, 0f, -1f);
+        frustumCuller.PerformCullingCheck();
+        Assert(treeRenderer.enabled && treeBehind.activeSelf, "Tree at 210m in front of camera should be visible.");
+
+        // Step 2: Move into hysteresis band (230m away) and turn camera away
+        cam.transform.position = UnityEngine.Vector3.zero;
+        cam.transform.forward = new UnityEngine.Vector3(0f, 0f, 1f);
+        frustumCuller.PerformCullingCheck();
+        Assert(!treeRenderer.enabled, "Tree behind camera should have its renderer disabled.");
+        Assert(treeBehind.activeSelf, "Frustum-only culling must keep GameObject active (RendererOnly).");
+        Assert(treeResettable.ResetCount == 0, "Frustum-only culling must NOT trigger ICullResettable.ResetOnCull.");
+
+        // Step 3: Turn camera back while still in hysteresis band (230m) -> must immediately reappear!
+        cam.transform.forward = new UnityEngine.Vector3(0f, 0f, -1f);
+        frustumCuller.PerformCullingCheck();
+        Assert(treeRenderer.enabled, "Tree in hysteresis band must reappear when camera turns back.");
+
+        Console.WriteLine("[PASS] All regression tests passed (10/10 assertion groups).");
     }
 
     private static void RunBenchmarks()
@@ -359,16 +427,18 @@ public static class CullingTestAndBenchmarkRunner
             GC.Collect();
             GC.WaitForPendingFinalizers();
             long memBeforeGrid = GC.GetTotalMemory(false);
+            long totalGridEval = 0;
             var sw = Stopwatch.StartNew();
             for (int iter = 0; iter < 100; iter++)
             {
                 target.transform.position = new UnityEngine.Vector3((iter % 10) * 15f, 0f, (iter / 10) * 15f);
                 culler.PerformCullingCheck();
+                totalGridEval += culler.LastEvaluatedObjectCount;
             }
             sw.Stop();
             long memAfterGrid = GC.GetTotalMemory(false);
             double gridMs = sw.Elapsed.TotalMilliseconds / 100.0;
-            int gridEvaluated = culler.LastEvaluatedObjectCount;
+            int gridEvaluated = (int)(totalGridEval / 100);
             int activeAfter = culler.ActiveCount;
             double culledPct = 100.0 * (count - activeAfter) / count;
             long gridAllocBytes = Math.Max(0, (memAfterGrid - memBeforeGrid) / 100);

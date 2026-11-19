@@ -6,6 +6,8 @@ namespace EnvironmentCulling.Editor
     [CustomEditor(typeof(EnvironmentDistanceCuller))]
     public class EnvironmentDistanceCullerEditor : UnityEditor.Editor
     {
+        private static GUIStyle cachedLabelStyle;
+
         public override void OnInspectorGUI()
         {
             EnvironmentDistanceCuller culler = (EnvironmentDistanceCuller)target;
@@ -37,6 +39,7 @@ namespace EnvironmentCulling.Editor
 
             if (GUILayout.Button("Scan & Categorize Hierarchy Now", GUILayout.Height(30)))
             {
+                Undo.RecordObject(culler, "Scan & Categorize Hierarchy");
                 culler.ScanAndInitialize();
                 EditorUtility.SetDirty(culler);
             }
@@ -49,6 +52,14 @@ namespace EnvironmentCulling.Editor
         {
             EnvironmentDistanceCuller culler = (EnvironmentDistanceCuller)target;
             if (culler == null) return;
+
+            SerializedProperty drawGizmosProp = serializedObject.FindProperty("drawGizmosInScene");
+            if (drawGizmosProp != null && !drawGizmosProp.boolValue) return;
+
+            if (cachedLabelStyle == null)
+            {
+                cachedLabelStyle = new GUIStyle { fontStyle = FontStyle.Bold };
+            }
 
             SerializedProperty targetProp = serializedObject.FindProperty("targetTransform");
             Transform targetTrans = targetProp != null ? (Transform)targetProp.objectReferenceValue : null;
@@ -76,13 +87,11 @@ namespace EnvironmentCulling.Editor
                 Handles.color = color;
                 Handles.DrawWireDisc(center, Vector3.up, radius);
 
-                GUIStyle labelStyle = new GUIStyle();
-                labelStyle.normal.textColor = color;
-                labelStyle.fontStyle = FontStyle.Bold;
+                cachedLabelStyle.normal.textColor = color;
 
                 Vector3 labelPos = center + new Vector3(radius * 0.707f, 0f, radius * 0.707f);
                 string frustumSuffix = frustumEnabled ? string.Empty : " [No Frustum]";
-                Handles.Label(labelPos, $"{catName} ({radius:0}m){frustumSuffix}", labelStyle);
+                Handles.Label(labelPos, $"{catName} ({radius:0}m){frustumSuffix}", cachedLabelStyle);
             }
         }
     }
