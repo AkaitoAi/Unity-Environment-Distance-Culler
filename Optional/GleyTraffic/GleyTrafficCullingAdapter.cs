@@ -82,12 +82,14 @@ namespace EnvironmentCulling.Optional.GleyTraffic
             if (initializationRoutine != null) StopCoroutine(initializationRoutine);
             initializationRoutine = null;
             boundTarget = null;
+#if GLEY_TRAFFIC_BACKGROUND_SIM
             if (configuredManager != null)
             {
                 configuredManager.ConfigureBackgroundSimulation(
                     false, null, backgroundEnterDistance, backgroundWakeDistance,
                     backgroundHiddenDelay, false, frustumPadding);
             }
+#endif
         }
 
         private IEnumerator BindAfterInitialization()
@@ -128,6 +130,7 @@ namespace EnvironmentCulling.Optional.GleyTraffic
                 boundTarget = target;
             }
 
+#if GLEY_TRAFFIC_BACKGROUND_SIM
             manager.ConfigureBackgroundSimulation(
                 enableBackgroundSimulation,
                 target,
@@ -136,6 +139,7 @@ namespace EnvironmentCulling.Optional.GleyTraffic
                 backgroundHiddenDelay,
                 cullRenderersOutsideFrustum,
                 frustumPadding);
+#endif
         }
 
         private void SanitizeSettings()

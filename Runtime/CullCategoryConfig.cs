@@ -60,18 +60,22 @@ namespace EnvironmentCulling
         public Bounds cachedBounds;
         public bool hasBounds;
         public int categoryIndex;
+        public bool isDynamic;
         public bool isWithinDistance;
+        public bool isWithinFrustum = true;
         public bool isCurrentlyActive;
         public CullMode lastAppliedMode;
         public ICullResettable resettable;
 
-        public CulledObjectData(GameObject go, int catIdx)
+        public CulledObjectData(GameObject go, int catIdx, bool dynamic = false)
         {
             gameObject = go;
             transform = go.transform;
             cachedWorldPosition = transform.position;
             categoryIndex = catIdx;
+            isDynamic = dynamic || go.GetComponentInChildren<Rigidbody>(true) != null;
             isWithinDistance = go.activeSelf;
+            isWithinFrustum = true;
             isCurrentlyActive = go.activeSelf;
             renderers = go.GetComponentsInChildren<Renderer>(true);
             resettable = go.GetComponent<ICullResettable>() ?? go.GetComponentInParent<ICullResettable>();
@@ -164,11 +168,23 @@ namespace EnvironmentCulling
             return new Bounds(t.position, Vector3.one * 2f);
         }
 
-        public void SetVisible(bool visible, CullMode mode, bool allowResetOnCull = true)
+        public void RefreshDynamicTransform()
+        {
+            if (transform == null) return;
+            Vector3 newPos = transform.position;
+            Vector3 delta = newPos - cachedWorldPosition;
+            if (delta.sqrMagnitude > 0.0001f)
+            {
+                cachedWorldPosition = newPos;
+                cachedBounds.center += delta;
+            }
+        }
+
+        public bool SetVisible(bool visible, CullMode mode, bool allowResetOnCull = true)
         {
             // Allow re-application if the cull mode changed (e.g. switching from
             // frustum RendererOnly to distance SetActive while already hidden)
-            if (isCurrentlyActive == visible && lastAppliedMode == mode) return;
+            if (isCurrentlyActive == visible && lastAppliedMode == mode) return false;
 
             if (!visible && allowResetOnCull && resettable != null &&
                 !(resettable is UnityEngine.Object uo && uo == null) && resettable.IsBroken)
@@ -217,6 +233,8 @@ namespace EnvironmentCulling
                     }
                 }
             }
+
+            return true;
         }
     }
 }

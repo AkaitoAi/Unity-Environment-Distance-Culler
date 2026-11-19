@@ -20,9 +20,11 @@ In open-world, racing, survival, or city-builder games, keeping thousands of dis
 
 ## Features
 
-- **2D XZ Spatial Grid Broad-Phase:** Partitions objects into `(cellX, cellZ, categoryIndex)` cells so out-of-range cells are skipped in a single check without iterating their objects.
+- **2D XZ Local-Window Spatial Grid:** Partitions static objects into `(cellX, cellZ, categoryIndex)` cells and probes only the local integer cell window around the target ($O(\text{LocalCells})$), skipping out-of-range cells without iterating the world.
+- **Dynamic & Runtime-Spawned Object Support:** Automatically detects `Rigidbody` objects (or `RegisterObject(go, forceDynamic: true)`) to track live positions, plus `RegisterObject` / `UnregisterObject` for runtime spawning and pooling.
 - **Category-Based Distance Tiers:** Auto-classifies scene children by GameObject name keywords into configurable distance tiers (e.g., Small Props, Trees & Vegetation, Buildings & Structures, Always-Active Roads/Landmarks).
-- **Hysteresis Anti-Flicker Band:** Separate activation (`maxDistance`) and deactivation (`maxDistance + hysteresis`) thresholds prevent objects from popping on/off at range boundaries.
+- **Asymmetric Distance & Frustum Hysteresis:** Separate activation (`maxDistance` / `frustumPadding`) and deactivation (`+ hysteresis` / `+ frustumHysteresis`) thresholds prevent popping at boundaries.
+- **Optional Frame Time-Slicing:** Set `maxVisibilityChangesPerCheck` to cap `SetActive` / `Renderer` transitions per tick and smooth mobile activation spikes.
 - **Dual Cull Modes:**
   - `GameObjectSetActive` — Disables the entire `GameObject` (graphics, colliders, scripts) for maximum CPU/GPU savings.
   - `RendererOnly` — Disables only `Renderer` components while keeping physics colliders and scripts active.
@@ -141,10 +143,10 @@ Measured using the included Roslyn offline benchmark harness (`Tests/Offline/run
 
 | Object Count | Active Objects (% Culled) | Linear Evals / Check | Spatial Grid Avg Evals / Check | Linear Time (C# Double) | Spatial Grid Time (C# Double) | Speedup | Amortized @ 60 FPS (5 Hz) |
 | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **1,000** | 306 (**69.4% culled**) | 1,000 | **74** (-92.6%) | 0.0184 ms | 0.0233 ms | 0.79× | ~0.0019 ms/frame |
-| **5,000** | 1,509 (**69.8% culled**) | 5,000 | **361** (-92.8%) | 0.0901 ms | 0.1266 ms | 0.71× | ~0.0106 ms/frame |
-| **10,000** | 3,024 (**69.8% culled**) | 10,000 | **724** (-92.8%) | 0.1605 ms | 0.1452 ms | **1.10×** | ~0.0121 ms/frame |
-| **25,000** | 7,578 (**69.7% culled**) | 25,000 | **1,840** (-92.6%) | 0.4023 ms | **0.1941 ms** | **2.07×** | **~0.0162 ms/frame** |
+| **1,000** | 306 (**69.4% culled**) | 1,000 | **86** (-91.4%) | 0.0216 ms | **0.0191 ms** | **1.13×** | ~0.0016 ms/frame |
+| **5,000** | 1,509 (**69.8% culled**) | 5,000 | **422** (-91.6%) | 0.1005 ms | **0.0312 ms** | **3.22×** | ~0.0026 ms/frame |
+| **10,000** | 3,024 (**69.8% culled**) | 10,000 | **839** (-91.6%) | 0.2142 ms | **0.0502 ms** | **4.27×** | ~0.0042 ms/frame |
+| **25,000** | 7,578 (**69.7% culled**) | 25,000 | **2,152** (-91.4%) | 0.5763 ms | **0.1357 ms** | **4.25×** | **~0.0113 ms/frame** |
 
 > **Why real Unity Editor / Device gains are even larger:**
 > - **~70% of scene objects are disabled** in a typical 2 km × 2 km world, directly cutting active `Renderer`s, shadow-caster submissions, and `Collider`s.

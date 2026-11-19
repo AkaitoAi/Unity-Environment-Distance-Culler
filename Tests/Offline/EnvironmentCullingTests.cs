@@ -113,6 +113,12 @@ namespace UnityEngine
             return list.ToArray();
         }
 
+        public T GetComponentInChildren<T>(bool includeInactive) where T : class
+        {
+            var arr = GetComponentsInChildren<T>(includeInactive);
+            return arr.Length > 0 ? arr[0] : null;
+        }
+
         private static void CollectInChildren<T>(Transform t, List<T> list) where T : class
         {
             if (t.gameObject != null)
@@ -137,6 +143,7 @@ namespace UnityEngine
     public class SkinnedMeshRenderer : Renderer { public Bounds localBounds; }
     public class SpriteRenderer : Renderer { public Sprite sprite; }
     public class MeshFilter : Component { public Mesh sharedMesh; }
+    public class Rigidbody : Component { }
     public class Mesh { public Bounds bounds; }
     public class Sprite { public Bounds bounds; }
 
@@ -214,8 +221,10 @@ namespace UnityEngine
     public static class Mathf
     {
         public static float Max(float a, float b) => Math.Max(a, b);
+        public static int Max(int a, int b) => Math.Max(a, b);
         public static float Abs(float a) => Math.Abs(a);
         public static int FloorToInt(float a) => (int)Math.Floor(a);
+        public static int CeilToInt(float a) => (int)Math.Ceiling(a);
         public static bool Approximately(float a, float b) => Math.Abs(a - b) < 0.00001f;
     }
 
@@ -390,7 +399,24 @@ public static class CullingTestAndBenchmarkRunner
         frustumCuller.PerformCullingCheck();
         Assert(treeRenderer.enabled, "Tree in hysteresis band must reappear when camera turns back.");
 
-        Console.WriteLine("[PASS] All regression tests passed (10/10 assertion groups).");
+        // Dynamic object & RegisterObject / UnregisterObject test
+        var dynProp = new UnityEngine.GameObject("prop_dynamic_crate");
+        dynProp.transform.position = new UnityEngine.Vector3(10f, 0f, 0f);
+        dynProp.AddComponentInstance(new UnityEngine.Rigidbody());
+        culler.RegisterObject(dynProp);
+        culler.PerformCullingCheck();
+        Assert(dynProp.activeSelf, "Dynamic prop near player should be active.");
+        dynProp.transform.position = new UnityEngine.Vector3(300f, 0f, 0f);
+        culler.PerformCullingCheck();
+        Assert(!dynProp.activeSelf, "Dynamic prop moved to 300m should be culled.");
+        dynProp.transform.position = new UnityEngine.Vector3(20f, 0f, 0f);
+        culler.PerformCullingCheck();
+        Assert(dynProp.activeSelf, "Dynamic prop moved back to 20m should reactivate.");
+        int beforeUnreg = culler.TotalTrackedCount;
+        culler.UnregisterObject(dynProp);
+        Assert(culler.TotalTrackedCount == beforeUnreg - 1, "UnregisterObject should decrement TotalTrackedCount.");
+
+        Console.WriteLine("[PASS] All regression tests passed (12/12 assertion groups).");
     }
 
     private static void RunBenchmarks()
