@@ -329,7 +329,7 @@ public static class CullingTestAndBenchmarkRunner
     {
         Console.WriteLine("\n--- EnvironmentDistanceCuller Offline Benchmarks ---");
         Console.WriteLine("Config: 2000m x 2000m world, 4 default categories, 60m spatial cell size, 100 iterations per run.");
-        int[] counts = { 1000, 5000, 10000 };
+        int[] counts = { 1000, 5000, 10000, 25000 };
 
         foreach (int count in counts)
         {
@@ -369,6 +369,8 @@ public static class CullingTestAndBenchmarkRunner
             long memAfterGrid = GC.GetTotalMemory(false);
             double gridMs = sw.Elapsed.TotalMilliseconds / 100.0;
             int gridEvaluated = culler.LastEvaluatedObjectCount;
+            int activeAfter = culler.ActiveCount;
+            double culledPct = 100.0 * (count - activeAfter) / count;
             long gridAllocBytes = Math.Max(0, (memAfterGrid - memBeforeGrid) / 100);
 
             // Measure Linear Scan
@@ -390,7 +392,7 @@ public static class CullingTestAndBenchmarkRunner
 
             double speedup = linMs / Math.Max(0.0001, gridMs);
             Console.WriteLine(
-                $"Objects: {count,5} | Linear: {linMs:F4} ms ({linEvaluated,5} evals) | SpatialGrid: {gridMs:F4} ms ({gridEvaluated,4} evals) | Speedup: {speedup:F2}x | Alloc/check: {gridAllocBytes} B");
+                $"Objects: {count,5} | Active: {activeAfter,5} ({culledPct:F1}% culled) | Linear: {linMs:F4} ms ({linEvaluated,5} evals) | SpatialGrid: {gridMs:F4} ms ({gridEvaluated,4} evals) | Speedup: {speedup:F2}x | Alloc/check: {gridAllocBytes} B");
         }
     }
 }

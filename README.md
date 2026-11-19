@@ -4,6 +4,20 @@ A lightweight, zero-GC, spatial-grid **distance and frustum culling system** for
 
 ---
 
+## Why Use This in Your Game Project?
+
+In open-world, racing, survival, or city-builder games, keeping thousands of distant props, trees, and buildings active wastes both CPU and GPU budget:
+
+| Problem Without Distance Culling | How `EnvironmentDistanceCuller` Solves It |
+| :--- | :--- |
+| **Excessive Draw Calls & Shadow Casters:** Unity's camera frustum culler still processes far-away renderers and directional shadow cascades. | **`GameObjectSetActive` & `RendererOnly` Modes:** Disables far renderers (and optionally colliders/scripts) so they never enter the render queue or shadow pass. |
+| **Physics Broadphase Overhead:** Thousands of static `Collider`s on distant props bloat PhysX broadphase updates. | **`GameObjectSetActive`:** Fully deactivates out-of-range props, removing their colliders and components from active simulation. |
+| **Mobile GC Spikes & Frame Drops:** Running `Vector3.Distance` on every object in `Update()` allocates or burns main-thread time every frame. | **Zero-GC Coroutine + 2D Spatial Grid:** Evaluates at a configurable `checkInterval` (default `0.2s` = 5 Hz) using pre-allocated buffers and skips ~92.5%+ of objects at the cell level. |
+| **Pop-In Flickering at Edges:** Objects near the threshold flicker on/off as the camera jitters. | **Per-Category Hysteresis:** Separate `maxDistance` (activate) and `maxDistance + hysteresis` (deactivate) bands eliminate boundary popping. |
+| **Tedious Manual Tagging:** Manually assigning LODs or cull volumes to 10,000+ scene objects takes hours. | **Keyword Auto-Classification:** Drop it on your `Env` root and click **Scan & Categorize Hierarchy Now**—objects are grouped automatically by name keywords. |
+
+---
+
 ## Features
 
 - **2D XZ Spatial Grid Broad-Phase:** Partitions objects into `(cellX, cellZ, categoryIndex)` cells so out-of-range cells are skipped in a single check without iterating their objects.
@@ -122,13 +136,17 @@ public class DestructibleProp : MonoBehaviour, ICullResettable
 ### Measured Offline Benchmark Results
 Measured using the included Roslyn offline benchmark harness (`Tests/Offline/run-tests.ps1`) in a `2000 m × 2000 m` simulated world with 4 default categories and `60 m` spatial cell size (100 iterations per configuration):
 
-| Object Count | Linear Scan Evals / Check | Spatial Grid Evals / Check | Object Evaluations Saved | Linear Time (C# Double) | Spatial Grid Time (C# Double) |
-| :---: | :---: | :---: | :---: | :---: | :---: |
-| **1,000** | 1,000 | **75** | **92.5%** | 0.0211 ms | 0.0224 ms |
-| **5,000** | 5,000 | **368** | **92.6%** | 0.0987 ms | 0.0964 ms |
-| **10,000** | 10,000 | **719** | **92.8%** | 0.1964 ms | 0.1492 ms |
+| Object Count | Active Objects (% Culled) | Linear Evals / Check | Spatial Grid Evals / Check | Linear Time (C# Double) | Spatial Grid Time (C# Double) | Speedup | Amortized @ 60 FPS (5 Hz) |
+| :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **1,000** | 306 (**69.4% culled**) | 1,000 | **75** (-92.5%) | 0.0189 ms | 0.0224 ms | 0.85× | ~0.0019 ms/frame |
+| **5,000** | 1,509 (**69.8% culled**) | 5,000 | **368** (-92.6%) | 0.0982 ms | 0.0965 ms | 1.02× | ~0.0080 ms/frame |
+| **10,000** | 3,024 (**69.8% culled**) | 10,000 | **719** (-92.8%) | 0.2741 ms | 0.1542 ms | **1.78×** | ~0.0129 ms/frame |
+| **25,000** | 7,578 (**69.7% culled**) | 25,000 | **1,832** (-92.7%) | 1.0905 ms | **0.2230 ms** | **4.89×** | **~0.0186 ms/frame** |
 
-> **Why real Unity Editor / Device gains are even larger:** In the offline C# test harness, `GameObject.SetActive` and `Transform.position` are plain C# field accesses. Inside Unity's native C++ engine, skipping **~93% of object evaluations** directly eliminates native interop calls, `Transform.IsChildOf` traversals, and redundant state checks—making `SpatialGrid` significantly faster on mobile CPUs as object counts grow.
+> **Why real Unity Editor / Device gains are even larger:**
+> - **~70% of scene objects are disabled** in a typical 2 km × 2 km world, directly cutting active `Renderer`s, shadow-caster submissions, and `Collider`s.
+> - In the offline C# test harness, `GameObject.SetActive` and `Transform.position` are plain C# field accesses. Inside Unity's native C++ engine, skipping **~92.7% of object evaluations** eliminates native C#-to-C++ interop calls and `Transform.IsChildOf` traversals.
+> - **Profiling in your own Unity scene:** Open **Window → Analysis → Profiler** (check `Rendering` → `Batches` / `SetPass Calls`, and `Physics` → `Active Rigidbodies/Colliders`) with `EnvironmentDistanceCuller` enabled vs disabled to measure exact GPU/CPU gains for your specific art assets.
 
 ---
 
