@@ -3,6 +3,20 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using EnvironmentCulling;
 
+namespace Unity.Profiling
+{
+    public struct ProfilerMarker
+    {
+        public ProfilerMarker(string name) { }
+        public Scope Auto() => new Scope();
+
+        public struct Scope : System.IDisposable
+        {
+            public void Dispose() { }
+        }
+    }
+}
+
 namespace UnityEngine
 {
     public class SerializeField : Attribute { }
@@ -186,6 +200,15 @@ namespace UnityEngine
         }
 
         public void Expand(float padding) => extents += Vector3.one * (padding * 0.5f);
+
+        public float SqrDistance(Vector3 point)
+        {
+            Vector3 delta = point - center;
+            float x = System.Math.Max(0f, System.Math.Abs(delta.x) - extents.x);
+            float y = System.Math.Max(0f, System.Math.Abs(delta.y) - extents.y);
+            float z = System.Math.Max(0f, System.Math.Abs(delta.z) - extents.z);
+            return x * x + y * y + z * z;
+        }
     }
 
     public struct Vector3
@@ -280,7 +303,41 @@ public static class CullingTestAndBenchmarkRunner
     public static void Run()
     {
         RunRegressionTests();
+        RunBoundsDistanceRegression();
         RunBenchmarks();
+    }
+
+    private static void RunBoundsDistanceRegression()
+    {
+        var root = new UnityEngine.GameObject("Env");
+        var target = new UnityEngine.GameObject("Player");
+        var culler = new EnvironmentDistanceCuller { gameObject = root, transform = root.transform };
+        culler.SetTarget(target.transform);
+        var prop = CreateProp(root.transform, "prop_large", 480f, 0f, 480f);
+        prop.GetComponentInChildren<UnityEngine.MeshRenderer>(true).bounds = new UnityEngine.Bounds(
+            prop.transform.position, new UnityEngine.Vector3(840f, 2f, 840f));
+        culler.ScanAndInitialize();
+        culler.PerformCullingCheck();
+        Assert(!prop.activeSelf, "Pivot distance must remain the default.");
+        Assert(culler.LastVisibilityChangeCount == 1, "A hide must count as one transition.");
+
+        var boundsMode = typeof(EnvironmentDistanceCuller).GetField("useRendererBoundsForDistance",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        boundsMode.SetValue(culler, true);
+        culler.PerformCullingCheck();
+        Assert(prop.activeSelf, "The grid must find bounds that reach into range from distant cells.");
+        culler.UseSpatialGrid = false;
+        culler.PerformCullingCheck();
+        Assert(prop.activeSelf, "The linear scan must agree with the grid.");
+        culler.UseSpatialGrid = true;
+        target.transform.position = new UnityEngine.Vector3(-1000f, 0f, -1000f);
+        culler.PerformCullingCheck();
+        Assert(!prop.activeSelf, "The grid must hide bounds when they leave range.");
+        culler.RestoreAllObjects();
+        Assert(prop.activeSelf, "Restore must show the culled object.");
+        culler.PerformCullingCheck();
+        Assert(!prop.activeSelf, "The rebuilt grid must track the restored object outside the window.");
+        Console.WriteLine("[PASS] Bounds distance, transition count, and grid restoration.");
     }
 
     private static void RunRegressionTests()

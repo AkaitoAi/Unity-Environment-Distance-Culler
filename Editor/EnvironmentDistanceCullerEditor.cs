@@ -31,6 +31,7 @@ namespace EnvironmentCulling.Editor
                 EditorGUILayout.LabelField($"Culled Objects: {culler.CulledCount}");
                 EditorGUILayout.LabelField($"Objects Evaluated Last Check: {culler.LastEvaluatedObjectCount}");
                 EditorGUILayout.LabelField($"Occupied Category Cells Visited: {culler.LastVisitedCellCount}");
+                EditorGUILayout.LabelField($"Visibility Changes: {culler.LastVisibilityChangeCount}");
                 GUI.color = Color.white;
             }
             EditorGUILayout.EndVertical();
