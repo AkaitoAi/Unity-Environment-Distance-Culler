@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using Unity.Profiling;
 
 namespace EnvironmentCulling
 {
@@ -14,6 +15,12 @@ namespace EnvironmentCulling
     public class EnvironmentDistanceCuller : MonoBehaviour
     {
         private const int MaxWindowProbeRadius = 20;
+        private static readonly ProfilerMarker CullingCheckMarker =
+            new ProfilerMarker("EnvironmentDistanceCuller.PerformCullingCheck");
+
+        [Tooltip("Measure distance to renderer bounds instead of the object pivot when bounds are available.")]
+        [SerializeField] private bool useRendererBoundsForDistance;
+        private bool indexedBoundsMode;
 
         [Header("Target Tracking")]
         [Tooltip("Target transform to calculate distances from (usually Player or main Camera).")]
@@ -98,6 +105,8 @@ namespace EnvironmentCulling
         private readonly Plane[] frustumPlanes = new Plane[6];
 
         // Cached reusable buffer arrays to keep PerformCullingCheck zero-GC
+        private float[] categoryGridReach;
+        private float[] cachedGridReaches;
         private float[] cachedActiveSqrDists;
         private float[] cachedDeactiveSqrDists;
         private int[] cachedCellRadii;
@@ -113,6 +122,7 @@ namespace EnvironmentCulling
         public int CulledCount => Mathf.Max(0, TotalTrackedCount - ActiveCount);
         public int LastEvaluatedObjectCount { get; private set; }
         public int LastVisitedCellCount { get; private set; }
+        public int LastVisibilityChangeCount { get; private set; }
         public Transform Target => targetTransform;
         public bool UseSpatialGrid
         {
@@ -124,6 +134,8 @@ namespace EnvironmentCulling
         {
             if (cachedActiveSqrDists == null || cachedActiveSqrDists.Length < count)
             {
+                categoryGridReach = new float[count];
+                cachedGridReaches = new float[count];
                 cachedActiveSqrDists = new float[count];
                 cachedDeactiveSqrDists = new float[count];
                 cachedCellRadii = new int[count];
@@ -169,10 +181,10 @@ namespace EnvironmentCulling
                 if (obj.gameObject == null) continue;
                 obj.isWithinDistance = true;
                 obj.isWithinFrustum = true;
-                obj.SetVisible(true, cachedModes != null && obj.categoryIndex < cachedModes.Length
-                    ? cachedModes[obj.categoryIndex]
-                    : CullMode.GameObjectSetActive, allowResetOnCull: false);
+                obj.SetVisible(true, obj.lastAppliedMode, allowResetOnCull: false);
             }
+            indexedCellSize = -1f;
+            gridWasUsed = false;
             ActiveCount = liveTrackedCount;
         }
 
@@ -261,7 +273,10 @@ namespace EnvironmentCulling
             }
             else if (useSpatialGrid)
             {
-                AddObjectToSpatialGrid(data);
+                if (indexedCellSize != Mathf.Max(5f, gridCellSize) || indexedBoundsMode != useRendererBoundsForDistance)
+                    RebuildSpatialGrid();
+                else
+                    AddObjectToSpatialGrid(data);
             }
         }
 
@@ -454,7 +469,11 @@ namespace EnvironmentCulling
         {
             spatialGrid.Clear();
             activeCells.Clear();
+            gridWasUsed = false;
             indexedCellSize = Mathf.Max(5f, gridCellSize);
+            indexedBoundsMode = useRendererBoundsForDistance;
+            EnsureCategoryBuffers(categories.Count);
+            Array.Clear(categoryGridReach, 0, categoryGridReach.Length);
 
             for (int i = 0; i < trackedObjects.Count; i++)
             {
@@ -466,8 +485,14 @@ namespace EnvironmentCulling
 
         private void AddObjectToSpatialGrid(CulledObjectData obj)
         {
-            if (indexedCellSize <= 0f) indexedCellSize = Mathf.Max(5f, gridCellSize);
             Vector3 pos = obj.cachedWorldPosition;
+            if (indexedBoundsMode && obj.hasBounds)
+            {
+                pos = obj.cachedBounds.center;
+                Vector3 extents = obj.cachedBounds.extents;
+                float reach = Mathf.Max(extents.x, extents.z);
+                categoryGridReach[obj.categoryIndex] = Mathf.Max(categoryGridReach[obj.categoryIndex], reach);
+            }
             Vector3Int key = new Vector3Int(
                 Mathf.FloorToInt(pos.x / indexedCellSize),
                 Mathf.FloorToInt(pos.z / indexedCellSize),
@@ -522,6 +547,8 @@ namespace EnvironmentCulling
 
         public void PerformCullingCheck()
         {
+            using var scope = CullingCheckMarker.Auto();
+            LastVisibilityChangeCount = 0;
             LastEvaluatedObjectCount = 0;
             LastVisitedCellCount = 0;
             EnsureDefaultCategories();
@@ -534,7 +561,8 @@ namespace EnvironmentCulling
 
             Vector3 targetPos = targetTransform.position;
             int activeCounter = 0;
-            int remainingTransitionBudget = maxVisibilityChangesPerCheck > 0 ? maxVisibilityChangesPerCheck : int.MaxValue;
+            int transitionBudget = maxVisibilityChangesPerCheck > 0 ? maxVisibilityChangesPerCheck : int.MaxValue;
+            int remainingTransitionBudget = transitionBudget;
             currentPassId++;
 
             bool doFrustum = enableFrustumCulling;
@@ -561,7 +589,9 @@ namespace EnvironmentCulling
             int catCount = categories.Count;
             EnsureCategoryBuffers(catCount);
             float cellSize = Mathf.Max(5f, gridCellSize);
-            bool policyChangedOrFirstGrid = !gridWasUsed;
+            bool rebuildGrid = useSpatialGrid && (indexedCellSize != cellSize || indexedBoundsMode != useRendererBoundsForDistance);
+            if (rebuildGrid) RebuildSpatialGrid();
+            bool policyChangedOrFirstGrid = !gridWasUsed || rebuildGrid;
             bool anyWideCategory = false;
 
             for (int i = 0; i < catCount; i++)
@@ -585,15 +615,15 @@ namespace EnvironmentCulling
 
                 cachedActiveSqrDists[i] = maxD * maxD;
                 cachedDeactiveSqrDists[i] = hystD * hystD;
-                int cellR = Mathf.CeilToInt(hystD / cellSize);
+                float cellReach = hystD + (useSpatialGrid ? categoryGridReach[i] : 0f);
+                cachedGridReaches[i] = cellReach;
+                int cellR = Mathf.CeilToInt(cellReach / cellSize);
                 cachedCellRadii[i] = cellR;
                 if (cellR > MaxWindowProbeRadius) anyWideCategory = true;
             }
 
             if (useSpatialGrid)
             {
-                if (indexedCellSize != cellSize) RebuildSpatialGrid();
-
                 bool hasCustomProtection = cachedProtectedHierarchy.Count > 0 || protectedPredicate != null;
                 bool useFullDictionaryPass = policyChangedOrFirstGrid || protectedPredicate != null || anyWideCategory;
 
@@ -712,6 +742,7 @@ namespace EnvironmentCulling
 
             gridWasUsed = useSpatialGrid;
             ActiveCount = activeCounter;
+            LastVisibilityChangeCount = transitionBudget - remainingTransitionBudget;
         }
 
         private void EvaluateSpatialCell(
@@ -734,8 +765,10 @@ namespace EnvironmentCulling
             float dx = Mathf.Max(0f, Mathf.Max(minX - targetPos.x, targetPos.x - (minX + indexedCellSize)));
             float dz = Mathf.Max(0f, Mathf.Max(minZ - targetPos.z, targetPos.z - (minZ + indexedCellSize)));
 
+            // Using the same expanded rectangle as the grid window conservatively includes large bounds.
+            float cellReach = cachedGridReaches[catIdx];
             bool inRange = !cachedAlwaysVis[catIdx] &&
-                dx * dx + dz * dz <= cachedDeactiveSqrDists[catIdx];
+                (indexedBoundsMode ? Mathf.Max(dx, dz) <= cellReach : dx * dx + dz * dz <= cachedDeactiveSqrDists[catIdx]);
 
             if (!cachedAlwaysVis[catIdx] && !inRange && !cell.inActiveList)
             {
@@ -800,7 +833,9 @@ namespace EnvironmentCulling
                 return obj.isCurrentlyActive;
             }
 
-            float sqrDist = (obj.cachedWorldPosition - targetPos).sqrMagnitude;
+            float sqrDist = useRendererBoundsForDistance && obj.hasBounds
+                ? obj.cachedBounds.SqrDistance(targetPos)
+                : (obj.cachedWorldPosition - targetPos).sqrMagnitude;
             bool withinDistance = obj.isWithinDistance
                 ? sqrDist <= cachedDeactiveSqrDists[catIdx]
                 : sqrDist <= cachedActiveSqrDists[catIdx];

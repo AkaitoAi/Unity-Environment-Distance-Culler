@@ -25,6 +25,8 @@ In open-world, racing, survival, or city-builder games, keeping thousands of dis
 - **Category-Based Distance Tiers:** Auto-classifies scene children by GameObject name keywords into configurable distance tiers (e.g., Small Props, Trees & Vegetation, Buildings & Structures, Always-Active Roads/Landmarks).
 - **Asymmetric Distance & Frustum Hysteresis:** Separate activation (`maxDistance` / `frustumPadding`) and deactivation (`+ hysteresis` / `+ frustumHysteresis`) thresholds prevent popping at boundaries.
 - **Optional Frame Time-Slicing:** Set `maxVisibilityChangesPerCheck` to cap `SetActive` / `Renderer` transitions per tick and smooth mobile activation spikes.
+- **Optional Bounds-Based Distance:** Enable **Use Renderer Bounds For Distance** to measure from the nearest point on cached renderer bounds. This helps keep large objects with distant pivots visible. Pivot distance remains the default. Very large bounds can widen the search for their category.
+- **Culling Diagnostics:** Track each check with `EnvironmentDistanceCuller.PerformCullingCheck` in the Unity Profiler and see the last visibility-change count in the Inspector.
 - **Dual Cull Modes:**
   - `GameObjectSetActive` — Disables the entire `GameObject` (graphics, colliders, scripts) for maximum CPU/GPU savings.
   - `RendererOnly` — Disables only `Renderer` components while keeping physics colliders and scripts active.
